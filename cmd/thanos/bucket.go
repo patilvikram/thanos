@@ -13,7 +13,6 @@ import (
 	"github.com/go-kit/kit/log"
 	"github.com/improbable-eng/thanos/pkg/block"
 	"github.com/improbable-eng/thanos/pkg/block/metadata"
-	"github.com/improbable-eng/thanos/pkg/objstore"
 	"github.com/improbable-eng/thanos/pkg/objstore/client"
 	"github.com/improbable-eng/thanos/pkg/runutil"
 	"github.com/improbable-eng/thanos/pkg/verifier"
@@ -47,53 +46,44 @@ var (
 )
 
 func registerBucket(m map[string]setupFunc, app *kingpin.Application, name string) {
-	cmd := app.Command(name, "Bucket utility commands")
+	cmd := app.Command(name, "Inspect metric data in an object storage bucket")
 
-	objStoreConfig := regCommonObjStoreFlags(cmd, "", true)
+	objStoreConfig := regCommonObjStoreFlags(cmd, "")
+	objStoreBackupConfig := regCommonObjStoreFlags(cmd, "-backup")
 
-	registerBucketVerify(m, cmd, name, objStoreConfig)
-	registerBucketLs(m, cmd, name, objStoreConfig)
-	registerBucketInspect(m, cmd, name, objStoreConfig)
-	return
-}
-
-func registerBucketVerify(m map[string]setupFunc, root *kingpin.CmdClause, name string, objStoreConfig *pathOrContent) {
-	cmd := root.Command("verify", "Verify all blocks in the bucket against specified issues")
-	objStoreBackupConfig := regCommonObjStoreFlags(cmd, "-backup", false, "Used for repair logic to backup blocks before removal.")
-	repair := cmd.Flag("repair", "Attempt to repair blocks for which issues were detected").
+	// Verify command.
+	verify := cmd.Command("verify", "Verify all blocks in the bucket against specified issues")
+	verifyRepair := verify.Flag("repair", "Attempt to repair blocks for which issues were detected").
 		Short('r').Default("false").Bool()
-	issuesToVerify := cmd.Flag("issues", fmt.Sprintf("Issues to verify (and optionally repair). Possible values: %v", allIssues())).
+	verifyIssues := verify.Flag("issues", fmt.Sprintf("Issues to verify (and optionally repair). Possible values: %v", allIssues())).
 		Short('i').Default(verifier.IndexIssueID, verifier.OverlappedBlocksIssueID).Strings()
-	idWhitelist := cmd.Flag("id-whitelist", "Block IDs to verify (and optionally repair) only. "+
+	verifyIDWhitelist := verify.Flag("id-whitelist", "Block IDs to verify (and optionally repair) only. "+
 		"If none is specified, all blocks will be verified. Repeated field").Strings()
 	m[name+" verify"] = func(g *run.Group, logger log.Logger, reg *prometheus.Registry, _ opentracing.Tracer, _ bool) error {
-		confContentYaml, err := objStoreConfig.Content()
+		bucketConfig, err := objStoreConfig.Content()
 		if err != nil {
 			return err
 		}
 
-		bkt, err := client.NewBucket(logger, confContentYaml, reg, name)
+		bkt, err := client.NewBucket(logger, bucketConfig, reg, name)
 		if err != nil {
 			return err
 		}
 		defer runutil.CloseWithLogOnErr(logger, bkt, "bucket client")
 
-		backupconfContentYaml, err := objStoreBackupConfig.Content()
+		backupBucketConfig, err := objStoreBackupConfig.Content()
 		if err != nil {
 			return err
 		}
 
-		var backupBkt objstore.Bucket
-		if len(backupconfContentYaml) == 0 {
-			if *repair {
+		backupBkt, err := client.NewBucket(logger, backupBucketConfig, reg, name)
+		if err == client.ErrNotFound {
+			if *verifyRepair {
 				return errors.Wrap(err, "repair is specified, so backup client is required")
 			}
+		} else if err != nil {
+			return err
 		} else {
-			backupBkt, err = client.NewBucket(logger, backupconfContentYaml, reg, name)
-			if err != nil {
-				return err
-			}
-
 			defer runutil.CloseWithLogOnErr(logger, backupBkt, "backup bucket client")
 		}
 
@@ -106,7 +96,7 @@ func registerBucketVerify(m map[string]setupFunc, root *kingpin.CmdClause, name 
 			issues []verifier.Issue
 		)
 
-		for _, i := range *issuesToVerify {
+		for _, i := range *verifyIssues {
 			issueFn, ok := issuesMap[i]
 			if !ok {
 				return errors.Errorf("no such issue name %s", i)
@@ -114,16 +104,16 @@ func registerBucketVerify(m map[string]setupFunc, root *kingpin.CmdClause, name 
 			issues = append(issues, issueFn)
 		}
 
-		if *repair {
+		if *verifyRepair {
 			v = verifier.NewWithRepair(logger, bkt, backupBkt, issues)
 		} else {
 			v = verifier.New(logger, bkt, issues)
 		}
 
 		var idMatcher func(ulid.ULID) bool = nil
-		if len(*idWhitelist) > 0 {
+		if len(*verifyIDWhitelist) > 0 {
 			whilelistIDs := map[string]struct{}{}
-			for _, bid := range *idWhitelist {
+			for _, bid := range *verifyIDWhitelist {
 				id, err := ulid.Parse(bid)
 				if err != nil {
 					return errors.Wrap(err, "invalid ULID found in --id-whitelist flag")
@@ -141,19 +131,17 @@ func registerBucketVerify(m map[string]setupFunc, root *kingpin.CmdClause, name 
 
 		return v.Verify(ctx, idMatcher)
 	}
-}
 
-func registerBucketLs(m map[string]setupFunc, root *kingpin.CmdClause, name string, objStoreConfig *pathOrContent) {
-	cmd := root.Command("ls", "List all blocks in the bucket")
-	output := cmd.Flag("output", "Optional format in which to print each block's information. Options are 'json', 'wide' or a custom template.").
+	ls := cmd.Command("ls", "List all blocks in the bucket")
+	lsOutput := ls.Flag("output", "Format in which to print each block's information. May be 'json' or custom template.").
 		Short('o').Default("").String()
 	m[name+" ls"] = func(g *run.Group, logger log.Logger, reg *prometheus.Registry, _ opentracing.Tracer, _ bool) error {
-		confContentYaml, err := objStoreConfig.Content()
+		bucketConfig, err := objStoreConfig.Content()
 		if err != nil {
 			return err
 		}
 
-		bkt, err := client.NewBucket(logger, confContentYaml, reg, name)
+		bkt, err := client.NewBucket(logger, bucketConfig, reg, name)
 		if err != nil {
 			return err
 		}
@@ -167,7 +155,7 @@ func registerBucketLs(m map[string]setupFunc, root *kingpin.CmdClause, name stri
 		defer cancel()
 
 		var (
-			format     = *output
+			format     = *lsOutput
 			printBlock func(id ulid.ULID) error
 		)
 
@@ -232,13 +220,11 @@ func registerBucketLs(m map[string]setupFunc, root *kingpin.CmdClause, name stri
 			return printBlock(id)
 		})
 	}
-}
 
-func registerBucketInspect(m map[string]setupFunc, root *kingpin.CmdClause, name string, objStoreConfig *pathOrContent) {
-	cmd := root.Command("inspect", "Inspect all blocks in the bucket in detailed, table-like way")
-	selector := cmd.Flag("selector", "Selects blocks based on label, e.g. '-l key1=\"value1\" -l key2=\"value2\"'. All key value pairs must match.").Short('l').
+	inspect := cmd.Command("inspect", "Inspect all blocks in the bucket")
+	selector := inspect.Flag("selector", "Selects blocks based on label, e.g. '-l key1=\"value1\" -l key2=\"value2\"'. All key value pairs must match.").Short('l').
 		PlaceHolder("<name>=\"<value>\"").Strings()
-	sortBy := cmd.Flag("sort-by", "Sort by columns. It's also possible to sort by multiple columns, e.g. '--sort-by FROM --sort-by UNTIL'. I.e., if the 'FROM' value is equal the rows are then further sorted by the 'UNTIL' value.").
+	sortBy := inspect.Flag("sort-by", "Sort by columns. It's also possible to sort by multiple columns, e.g. '--sort-by FROM --sort-by UNTIL'. I.e., if the 'FROM' value is equal the rows are then further sorted by the 'UNTIL' value.").
 		Default("FROM", "UNTIL").Enums(inspectColumns...)
 
 	m[name+" inspect"] = func(g *run.Group, logger log.Logger, reg *prometheus.Registry, _ opentracing.Tracer, _ bool) error {
@@ -249,12 +235,12 @@ func registerBucketInspect(m map[string]setupFunc, root *kingpin.CmdClause, name
 			return fmt.Errorf("error parsing selector flag: %v", err)
 		}
 
-		confContentYaml, err := objStoreConfig.Content()
+		bucketConfig, err := objStoreConfig.Content()
 		if err != nil {
 			return err
 		}
 
-		bkt, err := client.NewBucket(logger, confContentYaml, reg, name)
+		bkt, err := client.NewBucket(logger, bucketConfig, reg, name)
 		if err != nil {
 			return err
 		}

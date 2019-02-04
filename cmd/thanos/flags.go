@@ -134,56 +134,42 @@ func modelDuration(flags *kingpin.FlagClause) *model.Duration {
 }
 
 type pathOrContent struct {
-	fileFlagName    string
-	contentFlagName string
+	name string
 
-	required bool
-	path     *string
-	content  *string
+	path    *string
+	content *string
 }
 
-// Content returns content of the file. Flag that specifies path has priority.
-// It returns error if the content is empty and required flag is set to true.
 func (p *pathOrContent) Content() ([]byte, error) {
 	if len(*p.path) > 0 && len(*p.content) > 0 {
-		return nil, errors.Errorf("Both %s and %s flags set.", p.fileFlagName, p.contentFlagName)
+		return nil, errors.Errorf("Both file and content are set for %s", p.name)
 	}
 
-	var content []byte
 	if len(*p.path) > 0 {
 		c, err := ioutil.ReadFile(*p.path)
 		if err != nil {
-			return nil, errors.Wrapf(err, "loading YAML file %s for %s", *p.path, p.fileFlagName)
+			return nil, errors.Wrap(err, fmt.Sprintf("loading YAML file %s for %s", *p.path, p.name))
 		}
-		content = c
-	} else {
-		content = []byte(*p.content)
+		return c, nil
 	}
 
-	if len(content) == 0 && p.required {
-		return nil, errors.Errorf("flag %s or %s is required for running this command and content cannot be empty.", p.fileFlagName, p.contentFlagName)
+	if len(*p.content) > 0 {
+		return []byte(*p.content), nil
 	}
 
-	return content, nil
+	return nil, nil
 }
 
-func regCommonObjStoreFlags(cmd *kingpin.CmdClause, suffix string, required bool, extraDesc ...string) *pathOrContent {
+func regCommonObjStoreFlags(cmd *kingpin.CmdClause, suffix string) *pathOrContent {
 	fileFlagName := fmt.Sprintf("objstore%s.config-file", suffix)
-	contentFlagName := fmt.Sprintf("objstore%s.config", suffix)
+	bucketConfFile := cmd.Flag(fileFlagName, fmt.Sprintf("Path to YAML file that contains object store%s configuration.", suffix)).
+		PlaceHolder("<bucket.config-yaml-path>").String()
 
-	help := fmt.Sprintf("Path to YAML file that contains object store%s configuration.", suffix)
-	help = strings.Join(append([]string{help}, extraDesc...), " ")
-	bucketConfFile := cmd.Flag(fileFlagName, help).PlaceHolder("<bucket.config-yaml-path>").String()
-
-	help = fmt.Sprintf("Alternative to '%s' flag. Object store%s configuration in YAML.", fileFlagName, suffix)
-	help = strings.Join(append([]string{help}, extraDesc...), " ")
-	bucketConf := cmd.Flag(contentFlagName, help).
+	bucketConf := cmd.Flag(fmt.Sprintf("objstore%s.config", suffix), fmt.Sprintf("Alternative to '%s' flag. Object store%s configuration in YAML.", fileFlagName, suffix)).
 		PlaceHolder("<bucket.config-yaml>").String()
 
 	return &pathOrContent{
-		fileFlagName:    fileFlagName,
-		contentFlagName: contentFlagName,
-		required:        required,
+		name: fmt.Sprintf("objstore%s.config", suffix),
 
 		path:    bucketConfFile,
 		content: bucketConf,

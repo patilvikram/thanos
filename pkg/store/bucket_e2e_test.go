@@ -5,7 +5,6 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -22,20 +21,7 @@ import (
 	"github.com/prometheus/tsdb/labels"
 )
 
-type storeSuite struct {
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-
-	store            *BucketStore
-	minTime, maxTime int64
-}
-
-func (s *storeSuite) Close() {
-	s.cancel()
-	s.wg.Wait()
-}
-
-func prepareStoreWithTestBlocks(t testing.TB, dir string, bkt objstore.Bucket) *storeSuite {
+func prepareStoreWithTestBlocks(t testing.TB, ctx context.Context, dir string, bkt objstore.Bucket) (store *BucketStore, minTime, maxTime int64) {
 	series := []labels.Labels{
 		labels.FromStrings("a", "1", "b", "1"),
 		labels.FromStrings("a", "1", "b", "2"),
@@ -51,18 +37,18 @@ func prepareStoreWithTestBlocks(t testing.TB, dir string, bkt objstore.Bucket) *
 	start := time.Now()
 	now := start
 
-	ctx, cancel := context.WithCancel(context.Background())
-	s := &storeSuite{cancel: cancel}
+	minTime = int64(0)
+	maxTime = int64(0)
 	blocks := 0
 	for i := 0; i < 3; i++ {
 		mint := timestamp.FromTime(now)
 		now = now.Add(2 * time.Hour)
 		maxt := timestamp.FromTime(now)
 
-		if s.minTime == 0 {
-			s.minTime = mint
+		if minTime == 0 {
+			minTime = mint
 		}
-		s.maxTime = maxt
+		maxTime = maxt
 
 		// Create two blocks per time slot. Only add 10 samples each so only one chunk
 		// gets created each. This way we can easily verify we got 10 chunks per series below.
@@ -87,15 +73,10 @@ func prepareStoreWithTestBlocks(t testing.TB, dir string, bkt objstore.Bucket) *
 		testutil.Ok(t, os.RemoveAll(dir2))
 	}
 
-	store, err := NewBucketStore(log.NewLogfmtLogger(os.Stderr), nil, bkt, dir, 100, 0, false, 20)
+	store, err := NewBucketStore(log.NewLogfmtLogger(os.Stderr), nil, bkt, dir, 100, 0, false)
 	testutil.Ok(t, err)
 
-	s.store = store
-
-	s.wg.Add(1)
 	go func() {
-		defer s.wg.Done()
-
 		if err := runutil.Repeat(100*time.Millisecond, ctx.Done(), func() error {
 			return store.SyncBlocks(ctx)
 		}); err != nil && errors.Cause(err) != context.Canceled {
@@ -106,7 +87,6 @@ func prepareStoreWithTestBlocks(t testing.TB, dir string, bkt objstore.Bucket) *
 
 	rctx, rcancel := context.WithTimeout(ctx, 30*time.Second)
 	defer rcancel()
-
 	testutil.Ok(t, runutil.Retry(100*time.Millisecond, rctx.Done(), func() error {
 		if store.numBlocks() < blocks {
 			return errors.New("not all blocks loaded")
@@ -114,7 +94,7 @@ func prepareStoreWithTestBlocks(t testing.TB, dir string, bkt objstore.Bucket) *
 		return nil
 	}))
 
-	return s
+	return store, minTime, maxTime
 }
 
 func TestBucketStore_e2e(t *testing.T) {
@@ -126,14 +106,13 @@ func TestBucketStore_e2e(t *testing.T) {
 		testutil.Ok(t, err)
 		defer func() { testutil.Ok(t, os.RemoveAll(dir)) }()
 
-		s := prepareStoreWithTestBlocks(t, dir, bkt)
-		defer s.Close()
+		store, minTime, maxTime := prepareStoreWithTestBlocks(t, ctx, dir, bkt)
 
-		mint, maxt := s.store.TimeRange()
-		testutil.Equals(t, s.minTime, mint)
-		testutil.Equals(t, s.maxTime, maxt)
+		mint, maxt := store.TimeRange()
+		testutil.Equals(t, minTime, mint)
+		testutil.Equals(t, maxTime, maxt)
 
-		vals, err := s.store.LabelValues(ctx, &storepb.LabelValuesRequest{Label: "a"})
+		vals, err := store.LabelValues(ctx, &storepb.LabelValuesRequest{Label: "a"})
 		testutil.Ok(t, err)
 		testutil.Equals(t, []string{"1", "2"}, vals.Values)
 
@@ -149,7 +128,7 @@ func TestBucketStore_e2e(t *testing.T) {
 		}
 		srv := newStoreSeriesServer(ctx)
 
-		testutil.Ok(t, s.store.Series(&storepb.SeriesRequest{
+		testutil.Ok(t, store.Series(&storepb.SeriesRequest{
 			Matchers: []storepb.LabelMatcher{
 				{Type: storepb.LabelMatcher_RE, Name: "a", Value: "1|2"},
 			},
@@ -169,7 +148,7 @@ func TestBucketStore_e2e(t *testing.T) {
 		}
 		srv = newStoreSeriesServer(ctx)
 
-		testutil.Ok(t, s.store.Series(&storepb.SeriesRequest{
+		testutil.Ok(t, store.Series(&storepb.SeriesRequest{
 			Matchers: []storepb.LabelMatcher{
 				{Type: storepb.LabelMatcher_EQ, Name: "b", Value: "2"},
 			},
@@ -190,7 +169,7 @@ func TestBucketStore_e2e(t *testing.T) {
 		}
 		srv = newStoreSeriesServer(ctx)
 
-		testutil.Ok(t, s.store.Series(&storepb.SeriesRequest{
+		testutil.Ok(t, store.Series(&storepb.SeriesRequest{
 			Matchers: []storepb.LabelMatcher{
 				{Type: storepb.LabelMatcher_EQ, Name: "a", Value: "1"},
 				{Type: storepb.LabelMatcher_EQ, Name: "ext2", Value: "value2"},
@@ -206,7 +185,7 @@ func TestBucketStore_e2e(t *testing.T) {
 		}
 
 		srv = newStoreSeriesServer(ctx)
-		testutil.Ok(t, s.store.Series(&storepb.SeriesRequest{
+		testutil.Ok(t, store.Series(&storepb.SeriesRequest{
 			Matchers: []storepb.LabelMatcher{
 				{Type: storepb.LabelMatcher_EQ, Name: "a", Value: "1"},
 				{Type: storepb.LabelMatcher_EQ, Name: "ext2", Value: "wrong-value"},

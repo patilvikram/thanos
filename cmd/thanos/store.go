@@ -36,13 +36,10 @@ func registerStore(m map[string]setupFunc, app *kingpin.Application, name string
 	chunkPoolSize := cmd.Flag("chunk-pool-size", "Maximum size of concurrently allocatable bytes for chunks.").
 		Default("2GB").Bytes()
 
-	objStoreConfig := regCommonObjStoreFlags(cmd, "", true)
+	objStoreConfig := regCommonObjStoreFlags(cmd, "")
 
 	syncInterval := cmd.Flag("sync-block-duration", "Repeat interval for syncing the blocks between local and remote view.").
 		Default("3m").Duration()
-
-	blockSyncConcurrency := cmd.Flag("block-sync-concurrency", "Number of goroutines to use when syncing blocks from object storage.").
-		Default("20").Int()
 
 	m[name] = func(g *run.Group, logger log.Logger, reg *prometheus.Registry, tracer opentracing.Tracer, debugLogging bool) error {
 		peer, err := newPeerFn(logger, reg, false, "", false)
@@ -66,7 +63,6 @@ func registerStore(m map[string]setupFunc, app *kingpin.Application, name string
 			name,
 			debugLogging,
 			*syncInterval,
-			*blockSyncConcurrency,
 		)
 	}
 }
@@ -90,15 +86,14 @@ func runStore(
 	component string,
 	verbose bool,
 	syncInterval time.Duration,
-	blockSyncConcurrency int,
 ) error {
 	{
-		confContentYaml, err := objStoreConfig.Content()
+		bucketConfig, err := objStoreConfig.Content()
 		if err != nil {
 			return err
 		}
 
-		bkt, err := client.NewBucket(logger, confContentYaml, reg, component)
+		bkt, err := client.NewBucket(logger, bucketConfig, reg, component)
 		if err != nil {
 			return errors.Wrap(err, "create bucket client")
 		}
@@ -118,7 +113,6 @@ func runStore(
 			indexCacheSizeBytes,
 			chunkPoolSizeBytes,
 			verbose,
-			blockSyncConcurrency,
 		)
 		if err != nil {
 			return errors.Wrap(err, "create object storage store")

@@ -8,17 +8,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-kit/kit/log"
-	"github.com/improbable-eng/thanos/pkg/objstore"
-	"github.com/improbable-eng/thanos/pkg/objstore/client"
-	"github.com/improbable-eng/thanos/pkg/objstore/s3"
-	"github.com/improbable-eng/thanos/pkg/promclient"
 	"github.com/improbable-eng/thanos/pkg/runutil"
-	"github.com/improbable-eng/thanos/pkg/testutil"
 	"github.com/pkg/errors"
 	"github.com/prometheus/common/model"
+
+	"github.com/go-kit/kit/log"
+	"github.com/improbable-eng/thanos/pkg/objstore"
 	"github.com/prometheus/prometheus/pkg/timestamp"
 	"github.com/prometheus/tsdb/labels"
+
+	"github.com/improbable-eng/thanos/pkg/objstore/client"
+	"github.com/improbable-eng/thanos/pkg/objstore/s3"
+	"github.com/improbable-eng/thanos/pkg/testutil"
 	"gopkg.in/yaml.v2"
 )
 
@@ -94,7 +95,7 @@ func TestStoreGatewayQuery(t *testing.T) {
 		}
 
 		var err error
-		res, err = promclient.QueryInstant(ctx, nil, urlParse(t, "http://"+queryHTTP(1)), "{a=\"1\"}", time.Now(), false)
+		res, err = queryPrometheus(ctx, "http://"+queryHTTP(1), time.Now(), "{a=\"1\"}", false)
 		if err != nil {
 			return err
 		}
@@ -128,7 +129,7 @@ func TestStoreGatewayQuery(t *testing.T) {
 		}
 
 		var err error
-		res, err = promclient.QueryInstant(ctx, nil, urlParse(t, "http://"+queryHTTP(1)), "{a=\"1\"}", time.Now(), true)
+		res, err = queryPrometheus(ctx, "http://"+queryHTTP(1), time.Now(), "{a=\"1\"}", true)
 		if err != nil {
 			return err
 		}

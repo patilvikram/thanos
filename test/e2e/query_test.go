@@ -2,12 +2,13 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"testing"
 	"time"
 
-	"github.com/improbable-eng/thanos/pkg/promclient"
 	"github.com/improbable-eng/thanos/pkg/runutil"
 	"github.com/improbable-eng/thanos/pkg/testutil"
 	"github.com/pkg/errors"
@@ -94,7 +95,7 @@ func testQuerySimple(t *testing.T, conf testConfig) {
 		}
 
 		var err error
-		res, err = promclient.QueryInstant(ctx, nil, urlParse(t, "http://"+queryHTTP(1)), "up", time.Now(), false)
+		res, err = queryPrometheus(ctx, "http://"+queryHTTP(1), time.Now(), "up", false)
 		if err != nil {
 			return err
 		}
@@ -137,7 +138,7 @@ func testQuerySimple(t *testing.T, conf testConfig) {
 		}
 
 		var err error
-		res, err = promclient.QueryInstant(ctx, nil, urlParse(t, "http://"+queryHTTP(1)), "up", time.Now(), true)
+		res, err = queryPrometheus(ctx, "http://"+queryHTTP(1), time.Now(), "up", true)
 		if err != nil {
 			return err
 		}
@@ -162,11 +163,39 @@ func testQuerySimple(t *testing.T, conf testConfig) {
 	}, res[1].Metric)
 }
 
-func urlParse(t *testing.T, addr string) *url.URL {
-	u, err := url.Parse(addr)
-	testutil.Ok(t, err)
+// queryPrometheus runs an instant query against the Prometheus HTTP v1 API.
+func queryPrometheus(ctx context.Context, ustr string, ts time.Time, q string, dedup bool) (model.Vector, error) {
+	u, err := url.Parse(ustr)
+	if err != nil {
+		return nil, err
+	}
+	args := url.Values{}
+	args.Add("query", q)
+	args.Add("time", ts.Format(time.RFC3339Nano))
+	args.Add("dedup", fmt.Sprintf("%v", dedup))
 
-	return u
+	u.Path += "/api/v1/query"
+	u.RawQuery = args.Encode()
+
+	req, err := http.NewRequest("GET", u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req.WithContext(ctx))
+	if err != nil {
+		return nil, err
+	}
+	defer runutil.CloseWithLogOnErr(nil, resp.Body, "close body query")
+
+	var m struct {
+		Data struct {
+			Result model.Vector `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+		return nil, err
+	}
+	return m.Data.Result, nil
 }
 
 func defaultPromConfig(name string, replicas int) string {

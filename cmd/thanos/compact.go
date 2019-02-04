@@ -72,7 +72,7 @@ func registerCompact(m map[string]setupFunc, app *kingpin.Application, name stri
 	dataDir := cmd.Flag("data-dir", "Data directory in which to cache blocks and process compactions.").
 		Default("./data").String()
 
-	objStoreConfig := regCommonObjStoreFlags(cmd, "", true)
+	objStoreConfig := regCommonObjStoreFlags(cmd, "")
 
 	syncDelay := modelDuration(cmd.Flag("sync-delay", "Minimum age of fresh (non-compacted) blocks before they are being processed.").
 		Default("30m"))
@@ -140,12 +140,12 @@ func runCompact(
 	reg.MustRegister(halted)
 	reg.MustRegister(retried)
 
-	confContentYaml, err := objStoreConfig.Content()
+	bucketConfig, err := objStoreConfig.Content()
 	if err != nil {
 		return err
 	}
 
-	bkt, err := client.NewBucket(logger, confContentYaml, reg, component)
+	bkt, err := client.NewBucket(logger, bucketConfig, reg, component)
 	if err != nil {
 		return err
 	}

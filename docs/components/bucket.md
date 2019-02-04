@@ -28,7 +28,7 @@ by adding a new command within `/cmd/thanos/bucket.go`
 ```$
 usage: thanos bucket [<flags>] <command> [<args> ...]
 
-Bucket utility commands
+Inspect metric data in an object storage bucket
 
 Flags:
   -h, --help               Show context-sensitive help (also try --help-long and
@@ -50,6 +50,12 @@ Flags:
       --objstore.config=<bucket.config-yaml>  
                            Alternative to 'objstore.config-file' flag. Object
                            store configuration in YAML.
+      --objstore-backup.config-file=<bucket.config-yaml-path>  
+                           Path to YAML file that contains object store-backup
+                           configuration.
+      --objstore-backup.config=<bucket.config-yaml>  
+                           Alternative to 'objstore-backup.config-file' flag.
+                           Object store-backup configuration in YAML.
 
 Subcommands:
   bucket verify [<flags>]
@@ -59,7 +65,7 @@ Subcommands:
     List all blocks in the bucket
 
   bucket inspect [<flags>]
-    Inspect all blocks in the bucket in detailed, table-like way
+    Inspect all blocks in the bucket
 
 
 ```
@@ -102,12 +108,10 @@ Flags:
                            store configuration in YAML.
       --objstore-backup.config-file=<bucket.config-yaml-path>  
                            Path to YAML file that contains object store-backup
-                           configuration. Used for repair logic to backup blocks
-                           before removal.
+                           configuration.
       --objstore-backup.config=<bucket.config-yaml>  
                            Alternative to 'objstore-backup.config-file' flag.
-                           Object store-backup configuration in YAML. Used for
-                           repair logic to backup blocks before removal.
+                           Object store-backup configuration in YAML.
   -r, --repair             Attempt to repair blocks for which issues were
                            detected
   -i, --issues=index_issue... ...  
@@ -157,54 +161,14 @@ Flags:
       --objstore.config=<bucket.config-yaml>  
                            Alternative to 'objstore.config-file' flag. Object
                            store configuration in YAML.
-  -o, --output=""          Optional format in which to print each block's
-                           information. Options are 'json', 'wide' or a custom
-                           template.
+      --objstore-backup.config-file=<bucket.config-yaml-path>  
+                           Path to YAML file that contains object store-backup
+                           configuration.
+      --objstore-backup.config=<bucket.config-yaml>  
+                           Alternative to 'objstore-backup.config-file' flag.
+                           Object store-backup configuration in YAML.
+  -o, --output=""          Format in which to print each block's information.
+                           May be 'json' or custom template.
 
 ```
 
-### inspect
-
-`bucket inspect` is used to inspect buckets in a detailed way.
-
-Example:
-```
-$ thanos bucket inspect -l environment=\"prod\"
-```
-
-[embedmd]:# (flags/bucket_inspect.txt)
-```txt
-usage: thanos bucket inspect [<flags>]
-
-Inspect all blocks in the bucket in detailed, table-like way
-
-Flags:
-  -h, --help                 Show context-sensitive help (also try --help-long
-                             and --help-man).
-      --version              Show application version.
-      --log.level=info       Log filtering level.
-      --log.format=logfmt    Log format to use.
-      --gcloudtrace.project=GCLOUDTRACE.PROJECT  
-                             GCP project to send Google Cloud Trace tracings to.
-                             If empty, tracing will be disabled.
-      --gcloudtrace.sample-factor=1  
-                             How often we send traces (1/<sample-factor>). If 0
-                             no trace will be sent periodically, unless forced
-                             by baggage item. See `pkg/tracing/tracing.go` for
-                             details.
-      --objstore.config-file=<bucket.config-yaml-path>  
-                             Path to YAML file that contains object store
-                             configuration.
-      --objstore.config=<bucket.config-yaml>  
-                             Alternative to 'objstore.config-file' flag. Object
-                             store configuration in YAML.
-  -l, --selector=<name>="<value>" ...  
-                             Selects blocks based on label, e.g. '-l
-                             key1="value1" -l key2="value2"'. All key value
-                             pairs must match.
-      --sort-by=FROM... ...  Sort by columns. It's also possible to sort by
-                             multiple columns, e.g. '--sort-by FROM --sort-by
-                             UNTIL'. I.e., if the 'FROM' value is equal the rows
-                             are then further sorted by the 'UNTIL' value.
-
-```
